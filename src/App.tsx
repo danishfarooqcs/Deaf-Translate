@@ -1,72 +1,165 @@
-import { useCallback, useState } from "react";
-import { RotateCcw, Sparkles } from "lucide-react";
-import { CameraView } from "@/components/CameraView";
-import { GesturePanel } from "@/components/GesturePanel";
-import { useHandTracking, type GestureEvent } from "@/lib/useHandTracking";
-import { isMuted, setMuted, speak } from "@/lib/speech";
-import { GESTURE_LABELS, SPOKEN_PHRASE } from "@/lib/handGestureDetector";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  MessageSquare,
+  BookOpen,
+  Award,
+  BarChart3,
+  Settings as SettingsIcon,
+  HelpCircle,
+  Bell,
+} from "lucide-react";
+import "./DeafListener.css";
+import type { AppSettings, HistoryEntry, TabId } from "./types";
+import { DEFAULT_SETTINGS } from "./types";
+import DeafListener from "./DeafListener";
+import ConversationMode from "./components/ConversationMode";
+import DictionaryMode from "./components/DictionaryMode";
+import TrainingMode from "./components/TrainingMode";
+import AnalyticsDashboard from "./components/AnalyticsDashboard";
+import SystemSettings from "./components/SystemSettings";
+import HelpDocs from "./components/HelpDocs";
 
-function App() {
-  const [muted, setMutedState] = useState(isMuted());
+const TABS: { id: TabId; label: string; icon: typeof Activity }[] = [
+  { id: "realtime", label: "Realtime Detection", icon: Activity },
+  { id: "conversation", label: "Conversation Mode", icon: MessageSquare },
+  { id: "dictionary", label: "Dictionary Mode", icon: BookOpen },
+  { id: "training", label: "Training Mode", icon: Award },
+  { id: "analytics", label: "Analytics Dashboard", icon: BarChart3 },
+  { id: "settings", label: "System Settings", icon: SettingsIcon },
+  { id: "help", label: "Help & Docs", icon: HelpCircle },
+];
 
-  const handleGesture = useCallback((event: GestureEvent) => {
-    speak(SPOKEN_PHRASE[event.gesture] ?? event.gesture);
-  }, []);
+const XP_PER_GESTURE = 6;
+const XP_TO_LEVEL = 1500;
 
-  const { videoRef, status, errorMessage, landmarks, lastGesture, history, retry, clearHistory } =
-    useHandTracking(handleGesture);
+export default function App() {
+  const [activeTab, setActiveTab] = useState<TabId>("realtime");
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [sessionHistory, setSessionHistory] = useState<HistoryEntry[]>([]);
+  const [xp, setXp] = useState(1070);
+  const [notifications] = useState(2);
+  const [gpuActive, setGpuActive] = useState(false);
+  const [liveStats, setLiveStats] = useState({ fps: 0, latencyMs: 0 });
 
-  const toggleMute = () => {
-    const next = !muted;
-    setMuted(next);
-    setMutedState(next);
+  const level = Math.floor(xp / XP_TO_LEVEL) + 1;
+  const xpIntoLevel = xp % XP_TO_LEVEL;
+  const progressPct = Math.min(100, (xpIntoLevel / XP_TO_LEVEL) * 100);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", settings.theme);
+  }, [settings.theme]);
+
+  const registerGesture = (entry: HistoryEntry) => {
+    setSessionHistory((h) => [entry, ...h].slice(0, 200));
+    setXp((x) => x + XP_PER_GESTURE);
   };
 
+  const activeLabel = useMemo(
+    () => TABS.find((t) => t.id === activeTab)?.label ?? "",
+    [activeTab]
+  );
+
+  useEffect(() => {
+    document.title = activeLabel ? `${activeLabel} · Deaf Listener AI` : "Deaf Listener AI";
+  }, [activeLabel]);
+
   return (
-    <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[color:var(--signal)] text-[color:var(--ink)]">
-            <Sparkles size={20} />
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-logo">
+            <Activity size={20} />
           </div>
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Signal</h1>
-            <p className="font-mono text-xs text-[color:var(--muted)]">hand gestures, spoken aloud</p>
+          <div className="brand-text">
+            <div className="brand-title">
+              DEAF
+              <br />
+              LISTENER <span className="accent">AI</span>
+            </div>
+            <div className="brand-live">
+              <span className="live-dot" />
+              LIVE TRANSLATION
+            </div>
           </div>
         </div>
-        {(status === "permission-denied" || status === "no-camera" || status === "error") && (
-          <button
-            onClick={retry}
-            className="flex items-center gap-2 rounded-full border border-[color:var(--line)] px-4 py-2 text-sm text-[color:var(--paper)] transition hover:border-[color:var(--signal)] hover:text-[color:var(--signal)]"
-          >
-            <RotateCcw size={14} /> Retry camera
-          </button>
-        )}
+
+        <nav className="nav-tabs" aria-label="Sections">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                className={`nav-tab${activeTab === tab.id ? " active" : ""}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <Icon />
+                {tab.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="topbar-stats">
+          <div className="stat-item active">
+            GPU
+            <strong>{gpuActive ? "ACTIVE" : "CPU"}</strong>
+          </div>
+          <div className="stat-item fps">
+            FPS
+            <strong>{liveStats.fps || "--"}</strong>
+          </div>
+          <div className="stat-item latency">
+            LATENCY
+            <strong>{liveStats.latencyMs ? `${liveStats.latencyMs}ms` : "--"}</strong>
+          </div>
+        </div>
+
+        <div className="level-badge">
+          <div className="level-badge-num">
+            LEVEL
+            <strong>{level}</strong>
+          </div>
+          <div>
+            <div className="level-progress-track">
+              <div className="level-progress-fill" style={{ width: `${progressPct}%` }} />
+            </div>
+            <div className="level-xp">
+              {xpIntoLevel}/{XP_TO_LEVEL}
+            </div>
+          </div>
+        </div>
+
+        <button className="icon-btn" aria-label="Notifications" title={`${notifications} notifications`}>
+          <Bell />
+          {notifications > 0 && <span className="notif-badge">{notifications}</span>}
+        </button>
       </header>
 
-      {errorMessage && (
-        <p className="rounded-xl border border-[color:var(--danger)]/40 bg-[color:var(--danger)]/10 px-4 py-3 text-sm text-[color:var(--danger)]">
-          {errorMessage}
-        </p>
-      )}
-
-      <main className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
-        <CameraView videoRef={videoRef} landmarks={landmarks} status={status} />
-        <GesturePanel
-          lastGesture={lastGesture}
-          history={history}
-          muted={muted}
-          onToggleMute={toggleMute}
-          onClearHistory={clearHistory}
-        />
+      <main className="main-content">
+        {activeTab === "realtime" && (
+          <DeafListener
+            settings={settings}
+            onGesture={registerGesture}
+            onStatsChange={(stats) => {
+              setGpuActive(stats.gpuActive);
+              setLiveStats({ fps: stats.fps, latencyMs: stats.latencyMs });
+            }}
+          />
+        )}
+        {activeTab === "conversation" && (
+          <ConversationMode settings={settings} onGesture={registerGesture} />
+        )}
+        {activeTab === "dictionary" && <DictionaryMode />}
+        {activeTab === "training" && <TrainingMode sessionHistory={sessionHistory} />}
+        {activeTab === "analytics" && (
+          <AnalyticsDashboard sessionHistory={sessionHistory} xp={xp} level={level} />
+        )}
+        {activeTab === "settings" && (
+          <SystemSettings settings={settings} onChange={setSettings} />
+        )}
+        {activeTab === "help" && <HelpDocs />}
       </main>
-
-      <footer className="font-mono text-xs text-[color:var(--muted)]">
-        Recognizes: {Object.values(GESTURE_LABELS).join(" · ")}. Runs entirely in your browser — no video leaves
-        your device.
-      </footer>
     </div>
   );
 }
-
-export default App;

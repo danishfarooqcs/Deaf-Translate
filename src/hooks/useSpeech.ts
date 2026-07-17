@@ -1,146 +1,58 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { useAppStore } from './useAppStore';
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { AppSettings } from "../types";
 
-// TypeScript interfaces for Web Speech API fallback
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
+interface UseSpeechResult {
+  voices: SpeechSynthesisVoice[];
+  speak: (text: string) => void;
+  cancel: () => void;
+  speaking: boolean;
+  supported: boolean;
 }
 
-interface SpeechRecognitionResultList {
-  readonly length: number;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  readonly length: number;
-  [index: number]: SpeechRecognitionAlternative;
-  isFinal: boolean;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-export function useSpeech() {
-  const voiceSettings = useAppStore((state) => state.voiceSettings);
+export function useSpeech(speechSettings: AppSettings["speech"]): UseSpeechResult {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [isListening, setIsListening] = useState(false);
-  
-  const recognitionRef = useRef<any>(null);
+  const [speaking, setSpeaking] = useState(false);
+  const supported = typeof window !== "undefined" && "speechSynthesis" in window;
+  const lastSpokenRef = useRef<string>("");
 
-  // Initialize Speech Synthesis Voices
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-
-    const loadVoices = () => {
-      const availableVoices = window.speechSynthesis.getVoices();
-      setVoices(availableVoices);
-    };
-
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-    
+    if (!supported) return;
+    const load = () => setVoices(window.speechSynthesis.getVoices());
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
     return () => {
-      if (window.speechSynthesis) {
-        window.speechSynthesis.onvoiceschanged = null;
-      }
+      window.speechSynthesis.onvoiceschanged = null;
     };
-  }, []);
+  }, [supported]);
 
-  // Speak method
-  const speak = useCallback((text: string) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-
-    // Stop speaking any current speech
+  const cancel = useCallback(() => {
+    if (!supported) return;
     window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, [supported]);
 
-    if (!text.trim()) return;
+  const speak = useCallback(
+    (text: string) => {
+      if (!supported || !speechSettings.enabled || speechSettings.muted) return;
+      if (!speechSettings.repeatHeldGestures && lastSpokenRef.current === text) return;
+      lastSpokenRef.current = text;
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    
-    // Apply voice settings
-    const selected = voices.find(v => v.name === voiceSettings.selectedVoice);
-    if (selected) {
-      utterance.voice = selected;
-    }
-    
-    utterance.rate = voiceSettings.playbackSpeed;
-    utterance.pitch = voiceSettings.pitch;
-    utterance.volume = voiceSettings.volume / 100;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.volume = speechSettings.volume;
+      utterance.rate = speechSettings.rate;
+      utterance.lang = speechSettings.language;
 
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
+      const voice = voices.find((v) => v.voiceURI === speechSettings.voiceURI);
+      if (voice) utterance.voice = voice;
 
-    window.speechSynthesis.speak(utterance);
-  }, [voices, voiceSettings]);
+      utterance.onstart = () => setSpeaking(true);
+      utterance.onend = () => setSpeaking(false);
+      utterance.onerror = () => setSpeaking(false);
 
-  // Cancel speech
-  const cancelSpeech = useCallback(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    setIsSpeaking(false);
-  }, []);
+      window.speechSynthesis.speak(utterance);
+    },
+    [supported, speechSettings, voices]
+  );
 
-  // Speech Recognition (Speech to Text)
-  const startListening = useCallback((
-    onResult: (text: string) => void,
-    onEndCallback?: () => void
-  ) => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn('Speech recognition is not supported in this browser.');
-      return;
-    }
-
-    if (isListening) return;
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US'; // Can be customized later
-
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
-
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const resultIndex = event.resultIndex;
-      const transcript = event.results[resultIndex][0].transcript;
-      onResult(transcript);
-    };
-
-    recognition.onerror = (err: any) => {
-      console.error('Speech recognition error:', err);
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-      if (onEndCallback) onEndCallback();
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-  }, [isListening]);
-
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    }
-  }, []);
-
-  return {
-    voices,
-    speak,
-    cancelSpeech,
-    isSpeaking,
-    isListening,
-    startListening,
-    stopListening,
-  };
+  return { voices, speak, cancel, speaking, supported };
 }
